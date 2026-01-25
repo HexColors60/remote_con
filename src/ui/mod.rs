@@ -314,6 +314,53 @@ impl RemoteConApp {
         }
     }
 
+    /// Save conversation to file with timestamp
+    fn save_conversation(&mut self) {
+        if self.console_output.is_empty() {
+            self.last_error = Some("No console output to save".to_string());
+            return;
+        }
+
+        use std::fs::File;
+        use std::io::Write;
+        use chrono::{Utc, Datelike, Timelike};
+
+        // Generate filename with timestamp: sesslog_YYYYMMDD_HHMMSS.txt
+        let now = Utc::now();
+        let filename = format!("sesslog_{:04}{:02}{:02}_{:02}{:02}{:02}.txt",
+            now.year(), now.month(), now.day(),
+            now.hour(), now.minute(), now.second());
+
+        match File::create(&filename) {
+            Ok(mut file) => {
+                // Write timestamp header
+                let timestamp = if let Some(ts) = self.output_update_timestamp {
+                    format!("# Conversation saved at: {:?}\n\n", ts)
+                } else {
+                    String::from("# Conversation saved\n\n")
+                };
+                let _ = file.write_all(timestamp.as_bytes());
+
+                // Write console output
+                for line in &self.console_output {
+                    let _ = file.write_all(line.as_bytes());
+                    let _ = file.write_all(b"\n");
+                }
+
+                // Write attachment info
+                if let Some(pid) = self.attached_pid {
+                    let _ = file.write_all(format!("\n# Attached to PID: {}", pid).as_bytes());
+                }
+
+                self.last_error = None;
+                self.status_message = format!("Saved to {}", filename);
+            }
+            Err(e) => {
+                self.last_error = Some(format!("Failed to save file: {}", e));
+            }
+        }
+    }
+
     /// Update the console output from worker messages
     fn update_from_worker(&mut self) {
         // Take the worker out temporarily to avoid borrow conflicts
@@ -621,6 +668,15 @@ impl RemoteConApp {
                 ui.add_enabled_ui(self.attached_pid.is_some(), |ui| {
                     if ui.button("\\n\\r").clicked() {
                         self.send_newline_carriage_return();
+                    }
+                });
+
+                ui.separator();
+
+                // Save button
+                ui.add_enabled_ui(!self.console_output.is_empty(), |ui| {
+                    if ui.button("Save").clicked() {
+                        self.save_conversation();
                     }
                 });
             });
