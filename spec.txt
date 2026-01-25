@@ -1,0 +1,152 @@
+SPEC: Windows CMD Console Attach Tool (Rust + egui)
+
+GOAL
+- Build a desktop GUI tool using Rust + egui.
+- Allow the user to select an existing cmd.exe process.
+- Attach to its console without bringing it to the foreground.
+- Read the console output (screen buffer).
+- Send commands to the console from another window.
+
+NON-GOALS
+- No true stdin/stdout pipe hijacking.
+- No cross-session (different Windows user / RDP session) support.
+- No UAC bypass. Privilege level must match the target cmd.exe.
+
+--------------------------------------------------
+USER WORKFLOW
+
+1. Launch the application.
+2. The UI lists all running cmd.exe processes with console windows.
+3. User selects a cmd.exe by PID.
+4. User clicks "Attach".
+5. Console output appears in the UI (tail of screen buffer).
+6. User types a command in the UI input box.
+7. Press Enter or Send to execute the command in the target cmd.exe.
+8. Output view updates automatically.
+9. User can Detach or Attach to another PID.
+
+--------------------------------------------------
+UI SPEC (egui)
+
+LEFT PANEL: CMD PROCESS LIST
+- Refresh button
+- Table/List with:
+  - PID
+  - Window title (if available)
+  - Session ID
+  - Has window (MainWindowHandle != 0)
+- Select one PID at a time
+- Show status:
+  - Attachable
+  - No window
+  - Access denied
+
+RIGHT PANEL: CONSOLE VIEWER
+- Status bar:
+  - Attached PID or "Not attached"
+  - Last update timestamp
+  - Lines to display (slider, e.g. 10..500)
+  - Refresh interval (slider, e.g. 50ms..2000ms)
+- Output area:
+  - Read-only multiline text
+  - Scrollable
+  - Optional auto-scroll to bottom
+- Input area:
+  - Single-line input box
+  - Send button
+  - Enter key sends command
+  - Optional Ctrl+C button (send ^C)
+
+--------------------------------------------------
+ARCHITECTURE (RUST)
+
+Modules:
+- ui/
+  - egui state and rendering
+- process/
+  - enumerate cmd.exe processes
+- console/
+  - attach.rs   (AttachConsole / FreeConsole)
+  - read.rs     (read CONOUT$ screen buffer)
+  - write.rs    (write CONIN$ input events)
+- worker/
+  - background thread for polling output
+
+Threading model:
+- UI thread: egui rendering only
+- Worker thread:
+  - Periodically attaches to console
+  - Reads last N lines
+  - Sends text to UI via channel
+
+--------------------------------------------------
+WINDOWS API BEHAVIOR
+
+ATTACH / DETACH
+- AttachConsole(pid)
+- Open CONOUT$ or CONIN$
+- Perform read or write
+- FreeConsole()
+- Preferred strategy:
+  - Attach and Free on each operation (safer, less side effects)
+
+READ OUTPUT (SCREEN BUFFER)
+- CreateFile("CONOUT$")
+- GetConsoleScreenBufferInfo
+- Determine cursor Y
+- Read last N lines using ReadConsoleOutputCharacterW
+- Trim trailing spaces and nulls
+
+WRITE INPUT (COMMAND SEND)
+- CreateFile("CONIN$")
+- Build INPUT_RECORD array:
+  - For each Unicode char:
+    - KEY_EVENT down
+    - KEY_EVENT up
+  - Append carriage return (Enter)
+- WriteConsoleInputW
+
+NOTE:
+- Does not require foreground window.
+- Does not rely on SendInput or fake keyboard events.
+
+--------------------------------------------------
+PROCESS ENUMERATION
+
+- Enumerate processes where exe name == "cmd.exe"
+- Prefer entries with MainWindowHandle != 0
+- Must be in the same Session ID
+- Privilege level must match (admin vs non-admin)
+
+--------------------------------------------------
+ERROR HANDLING
+
+- Access denied:
+  - Show "Run as administrator to attach"
+- Target process exits:
+  - Auto detach and update UI
+- AttachConsole failure:
+  - Display Win32 error code
+- Multiple attach attempts:
+  - Detach previous before attaching new
+
+--------------------------------------------------
+DEPENDENCIES (SUGGESTED)
+
+- eframe / egui
+- windows (official WinAPI bindings)
+- sysinfo (process enumeration)
+- crossbeam-channel or std mpsc
+- anyhow or thiserror
+
+--------------------------------------------------
+MVP ACCEPTANCE CRITERIA
+
+- Can list at least one running cmd.exe
+- Can attach without foregrounding the window
+- Can display last N lines of console output
+- Sending "echo test" executes in target cmd.exe
+- Works even if cmd.exe is focus-locked in background
+- Clean detach when cmd.exe exits
+
+END OF SPEC
